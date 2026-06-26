@@ -1,0 +1,90 @@
+FSM:
+  _: # enabled fsms
+    Passive:
+      id: 1
+    FixStand:
+      id: 2
+    Mimic_Dance1_subject2:
+      id: 5
+      type: Mimic
+    LocoVelocity:
+      id: 6
+      type: LocoVelocity
+    WalkVelocity:
+      id: 7
+      type: WalkVelocity
+  Passive:
+    transitions: 
+      FixStand: LT + up.on_pressed
+    mode: [ # motor mode
+      1,1,1,1,1,1,
+      1,1,1,1,1,1,
+      1,
+      1,1,1,1,1,1,1,
+      1,1,1,1,1,1,1
+    ]
+    kd: [
+      5,5,5,5,2,2,
+      5,5,5,5,2,2,
+      6,
+      2,2,2,2,2,2,2,
+      2,2,2,2,2,2,2,
+    ]
+  FixStand:
+    transitions: 
+      Passive: LT + B.on_pressed
+      Mimic_Dance1_subject2: RB + A.on_pressed
+      LocoVelocity: RB + X.on_pressed
+      WalkVelocity: RB + Y.on_pressed
+    kp: [
+      250, 250, 250, 400, 80, 40,
+      250, 250, 250, 400, 80, 40,
+      600,
+      250, 400, 80, 80, 20, 20, 20,
+      250, 400, 80, 80, 20, 20, 20,
+    ]
+    kd: [
+      6.5, 6.5, 6.5, 10, 1.5, 0.4,
+      6.5, 6.5, 6.5, 10, 1.5, 0.4,
+      6,
+      6, 10, 2, 2, 0.5, 0.5, 0.5,
+      6, 10, 2, 2, 0.5, 0.5, 0.5,
+    ]
+    ts: [0, 3]
+    qs: [
+      [],
+      [ 0, -0.3, 0, 0.5, -0.2, 0,
+        0, -0.3, 0, 0.5, -0.2, 0,
+        0,
+        0.28, 0, 0, 0.52, 0, 0, 0,
+        0.28, 0, 0, 0.52, 0, 0, 0,
+      ]
+    ]
+  LocoVelocity:
+    transitions: 
+      Passive: LT + B.on_pressed
+    max_vx: 0.5
+    max_vy: 0.3
+    max_omega: 0.5
+    swing_height: 0.08
+    stand_height: 0.0  # 0 = use default
+    send_interval_ms: 20
+  Mimic_Dance1_subject2:
+    transitions:
+      Passive: LT + B.on_pressed
+      FixStand: RT + A.on_pressed
+    motion_file: config/policy/mimic/v0/params/dance1_subject2.npz
+    policy_dir: config/policy/mimic/v0/
+    time_start: 0.0
+    time_end: 1000.0
+    dump_enabled: true
+  WalkVelocity:
+    transitions:
+      Passive: LT + B.on_pressed
+      FixStand: RT + Y.on_pressed
+    policy_dir: config/policy/walk_velocity/v0/
+    dump_enabled: true
+    # 手臂/腰部固定目标位置（参考 h1_2_walk_deploy_real/configs/h1_2.yaml）
+    arm_waist_target: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    arm_waist_kp: [300, 120, 120, 120, 80, 80, 80, 80, 120, 120, 120, 80, 80, 80, 80]
+    arm_waist_kd: [3, 2, 2, 2, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1]
