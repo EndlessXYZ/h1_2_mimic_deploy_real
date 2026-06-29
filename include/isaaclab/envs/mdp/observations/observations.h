@@ -39,6 +39,10 @@ REGISTER_OBSERVATION(base_ang_vel_pelvis)
     return std::vector<float>(pelvis_omega.data(), pelvis_omega.data() + 3);
 }
 
+// WARNING: Returns gravity in TORSO frame (IMU on torso_link), not pelvis frame.
+// The training side expects pelvis frame (root_link = pelvis floating base).
+// Use projected_gravity_pelvis for the correct pelvis-frame variant.
+// If you need pelvis-frame gravity matching training, DO NOT use this observation term.
 REGISTER_OBSERVATION(projected_gravity)
 {
     auto & asset = env->robot;

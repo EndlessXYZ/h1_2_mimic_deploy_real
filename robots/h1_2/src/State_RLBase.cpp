@@ -17,7 +17,18 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
 
     this->registered_checks.emplace_back(
         std::make_pair(
-            [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); },
+            [&]()->bool{
+                // Compute bad_orientation from raw lowstate data in the FSM thread
+                // (pre_run() calls lowstate->update(), so IMU/motor data is fresh).
+                // This decouples fall detection from the policy thread's robot->update().
+                auto & imu = lowstate->msg_.imu_state();
+                Eigen::Quaternionf imu_quat(
+                    imu.quaternion()[0], imu.quaternion()[1],
+                    imu.quaternion()[2], imu.quaternion()[3]
+                );
+                float waist_yaw = lowstate->msg_.motor_state()[unitree::TORSO_JOINT_IDX].q();
+                return isaaclab::mdp::bad_orientation(imu_quat, waist_yaw, 1.0f);
+            },
             FSMStringMap.right.at("Passive")
         )
     );

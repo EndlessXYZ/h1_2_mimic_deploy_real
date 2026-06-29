@@ -3,6 +3,7 @@
 
 #include "FSM/State_WalkVelocity.h"
 #include "unitree_articulation.h"
+#include "isaaclab/envs/mdp/terminations.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include "isaaclab/utils/utils.h"
@@ -132,6 +133,23 @@ State_WalkVelocity::State_WalkVelocity(int state_mode, std::string state_string)
     if (cfg["arm_waist_kd"]) {
         arm_waist_kd_ = cfg["arm_waist_kd"].as<std::vector<float>>();
     }
+
+    // Register fall detection (bad_orientation) — FSM thread variant.
+    // pre_run() calls lowstate->update() so IMU/motor data is fresh.
+    this->registered_checks.emplace_back(
+        std::make_pair(
+            [&]()->bool{
+                auto & imu = lowstate->msg_.imu_state();
+                Eigen::Quaternionf imu_quat(
+                    imu.quaternion()[0], imu.quaternion()[1],
+                    imu.quaternion()[2], imu.quaternion()[3]
+                );
+                float waist_yaw = lowstate->msg_.motor_state()[unitree::TORSO_JOINT_IDX].q();
+                return isaaclab::mdp::bad_orientation(imu_quat, waist_yaw, 1.0f);
+            },
+            FSMStringMap.right.at("Passive")
+        )
+    );
 
     spdlog::info("State_WalkVelocity initialized with policy_dir: {}", policy_dir.string());
 }

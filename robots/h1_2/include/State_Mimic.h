@@ -3,6 +3,7 @@
 #include "FSM/State_RLBase.h"
 #include <cnpy.h>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <stdexcept>
 #include <Eigen/Core>
@@ -53,17 +54,47 @@ class State_Mimic::MotionLoader_
 {
 public:
     MotionLoader_(std::string motion_file)
+    : motion_file_(std::move(motion_file))
     {
-        load_data_from_npz(motion_file);
-        num_frames = dof_positions.size();
+        load_data_from_npz(motion_file_);
+
+        // Guard size_t -> int conversion against overflow (practically impossible for motion files)
+        const int64_t frames_64 = static_cast<int64_t>(dof_positions.size());
+        if (frames_64 <= 0 || frames_64 > INT_MAX) {
+            throw std::runtime_error("Invalid frame count (" + std::to_string(frames_64) +
+                ") in motion file: " + motion_file_);
+        }
+        num_frames = static_cast<int>(frames_64);
+
+        if (!std::isfinite(fps) || fps <= 0.0f) {
+            throw std::runtime_error("Invalid fps (" + std::to_string(fps) +
+                ") in motion file: " + motion_file_);
+        }
+
         dt = 1.0f / fps;
-        duration = num_frames * dt;
+        if (!std::isfinite(dt) || dt <= 0.0f) {
+            throw std::runtime_error("Invalid dt (1/fps=" + std::to_string(fps) +
+                ") in motion file: " + motion_file_);
+        }
+
+        duration = static_cast<float>(num_frames) * dt;
+        if (!std::isfinite(duration) || duration <= 0.0f) {
+            throw std::runtime_error("Invalid duration (" + std::to_string(duration) +
+                ") in motion file: " + motion_file_);
+        }
 
         // Validate loaded motion data for NaN/INF
         for (const auto& pos : dof_positions) {
             for (int i = 0; i < pos.size(); i++) {
                 if (std::isnan(pos[i]) || std::isinf(pos[i])) {
-                    throw std::runtime_error("Motion file contains NaN/INF in joint_pos");
+                    throw std::runtime_error("NaN/INF in joint_pos, motion file: " + motion_file_);
+                }
+            }
+        }
+        for (const auto& vel : dof_velocities) {
+            for (int i = 0; i < vel.size(); i++) {
+                if (std::isnan(vel[i]) || std::isinf(vel[i])) {
+                    throw std::runtime_error("NaN/INF in joint_vel, motion file: " + motion_file_);
                 }
             }
         }
@@ -75,14 +106,53 @@ public:
     {
         cnpy::npz_t npz_data = cnpy::npz_load(motion_file);
 
+        const std::vector<std::string> required_keys = {
+            "body_pos_w", "body_quat_w", "joint_pos", "joint_vel", "fps"
+        };
+        for (const auto& key : required_keys) {
+            if (npz_data.find(key) == npz_data.end()) {
+                throw std::runtime_error("Missing required key '" + key + "' in motion file: " + motion_file);
+            }
+        }
+
         auto body_pos_w  = npz_data["body_pos_w"];   // [frame, body_id, 3]
         auto body_quat_w = npz_data["body_quat_w"];  // [frame, body_id, 4]
         auto joint_pos   = npz_data["joint_pos"];    // [frame, dof]
         auto joint_vel   = npz_data["joint_vel"];    // [frame, dof]
-        auto fps_array  = npz_data["fps"];            // [1]
+        auto fps_array   = npz_data["fps"];          // [1]
+
+        // Validate array dimensions
+        if (body_pos_w.shape.size() != 3 || body_quat_w.shape.size() != 3 ||
+            joint_pos.shape.size()   != 2 || joint_vel.shape.size()   != 2) {
+            throw std::runtime_error("Unexpected array dimensions in motion file");
+        }
+
+        const size_t num_frames_npz = body_pos_w.shape[0];
+        if (num_frames_npz == 0) {
+            throw std::runtime_error("Motion file has 0 frames");
+        }
+        if (body_quat_w.shape[0] != num_frames_npz ||
+            joint_pos.shape[0]   != num_frames_npz ||
+            joint_vel.shape[0]   != num_frames_npz) {
+            throw std::runtime_error("Frame count mismatch across arrays in motion file");
+        }
+
+        if (body_pos_w.shape[2] != 3) {
+            throw std::runtime_error("body_pos_w must have shape [*, *, 3]");
+        }
+        if (body_quat_w.shape[2] != 4) {
+            throw std::runtime_error("body_quat_w must have shape [*, *, 4]");
+        }
+        if (joint_pos.shape[1] != joint_vel.shape[1]) {
+            throw std::runtime_error("joint_pos and joint_vel DOF count mismatch");
+        }
+
         // numpy 默认 float64 存储, 但 C++ cnpy data<float>() 只读取底层字节不转换
         // 若 fps 实际是 float64 而按 float32 读取, 会得到 0.0 (IEEE 754 高位字节为 0)
         // 导致 dt = 1/0 = inf, 所有帧索引为 0, MotionLoader_ 始终返回第 0 帧数据
+        if (fps_array.num_vals == 0) {
+            throw std::runtime_error("fps array is empty in motion file");
+        }
         if (fps_array.word_size == sizeof(float)) {
             fps = fps_array.data<float>()[0];
         } else {
@@ -93,8 +163,6 @@ public:
         root_quaternions.clear();
         dof_positions.clear();
         dof_velocities.clear();
-
-        const size_t num_frames_npz = body_pos_w.shape[0];
 
         for (size_t i = 0; i < num_frames_npz; i++)
         {
@@ -125,6 +193,10 @@ public:
             dof_positions.push_back(joint_position);
             dof_velocities.push_back(joint_velocity);
         }
+    }
+
+    void set_frame(int idx) {
+        frame = std::min(idx, num_frames - 1);
     }
 
     void update(float time)
@@ -165,6 +237,8 @@ public:
     float fps;
     int num_frames;
     float duration;
+
+    std::string motion_file_;
 
     int frame;
     std::vector<Eigen::VectorXf> root_positions;

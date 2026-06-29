@@ -125,6 +125,11 @@ def main():
 
     # ---- 1. Load env config in play mode (no corruption, no RSI). ----
     env_cfg = load_env_cfg(args.task, play=True)
+    # Disable all early terminations for numerical validation.
+    # play=True only sets episode_length_s = 1e9, keeping anchor_pos/ori/ee_body_pos active.
+    # Those cause the env to reset every ~5 steps, breaking motion_frame continuity.
+    # For validation we need a clean 500-step trajectory with linear motion frame progression.
+    env_cfg.terminations = {}
     rl_cfg = load_rl_cfg(args.task)
 
     motion_cmd_cfg = env_cfg.commands["motion"]

@@ -188,8 +188,14 @@ int main(int argc, char* argv[])
     env.episode_length = 0;
 
     // ---- 6. 分配输出 buffer ----
-    // 注意: 不保存 C++ 重建的 obs term (因 motion 帧机制差异跳过 B/C 层对比),
-    // 只保存 ONNX 推理结果 nn_output 和处理后的动作 processed_action。
+    // B/C 层: C++ 独立计算的 6 个观测 term (用于与 golden obs_raw 逐段对比)
+    std::vector<float> cpp_obs_motion_command(n_steps * 54);
+    std::vector<float> cpp_obs_motion_anchor_ori_b(n_steps * 6);
+    std::vector<float> cpp_obs_base_ang_vel(n_steps * 3);
+    std::vector<float> cpp_obs_joint_pos(n_steps * 27);
+    std::vector<float> cpp_obs_joint_vel(n_steps * 27);
+    std::vector<float> cpp_obs_last_action(n_steps * 27);
+    // D/F 层
     std::vector<float> cpp_nn_output(n_steps * ACT_DIM);
     std::vector<float> cpp_proc_action(n_steps * ACT_DIM);
 
@@ -213,17 +219,30 @@ int main(int argc, char* argv[])
         env.episode_length += 1;
         robot->update();
 
-        // ===== B→C: 跳过 C++ obs 重建, 直接注入 golden obs_raw =====
-        // 已知设计差异: Python env 使用滑动窗口机制管理 motion 帧
-        // (motion_window_pos 0-6 循环), 而 C++ replay_motion->update() 线性推进帧索引,
-        // 导致 C++ 重建的 obs 与 Python golden obs_raw 不一致。
-        // 为仅验证 ONNX 推理核心路径 (D/F 层), 跳过 C++ obs compute(),
-        // 直接使用 golden trace 中保存的 obs_raw 作为 ONNX 输入。
-        std::unordered_map<std::string, std::vector<float>> golden_obs_map;
-        golden_obs_map["obs"] = std::vector<float>(
-            obs_raw.begin() + t * OBS_DIM,
-            obs_raw.begin() + (t + 1) * OBS_DIM);
-        auto action = env.alg->act(golden_obs_map);
+        // ===== B→C: C++ 独立计算观测 =====
+        // 1. 将 motion 帧对齐 Python (motion_window_pos[t] 由 golden trace 保存,
+        //    是 Python env step() 中 command_manager._update_command() 输出的 time_steps)
+        replay_motion->set_frame(motion_window_pos[t]);
+
+        // 2. 调用 observation_manager.compute() 让 C++ 计算 144 维观测
+        //    注意: YAML 无 group 嵌套时, 默认 group 名称为 "obs" (见 _prapare_terms())
+        auto cpp_actor_obs = env.observation_manager->compute_group("obs");
+
+        // 3. 拆分为 6 个 term 并保存到 buffer (偏移量与 compare 脚本 OBS_SEGMENTS 一致)
+        {
+            const float* data = cpp_actor_obs.data();
+            std::copy(data + 0,  data + 54,  cpp_obs_motion_command.begin() + t * 54);
+            std::copy(data + 54, data + 60,  cpp_obs_motion_anchor_ori_b.begin() + t * 6);
+            std::copy(data + 60, data + 63,  cpp_obs_base_ang_vel.begin() + t * 3);
+            std::copy(data + 63, data + 90,  cpp_obs_joint_pos.begin() + t * 27);
+            std::copy(data + 90, data + 117, cpp_obs_joint_vel.begin() + t * 27);
+            std::copy(data + 117, data + 144, cpp_obs_last_action.begin() + t * 27);
+        }
+
+        // 4. 构造 ONNX 输入并使用 C++ 独立计算的观测进行推理
+        std::unordered_map<std::string, std::vector<float>> obs_map;
+        obs_map["obs"] = std::move(cpp_actor_obs);
+        auto action = env.alg->act(obs_map);
         env.last_raw_action = action;
         env.action_manager->process_action(action);
 
@@ -243,10 +262,24 @@ int main(int argc, char* argv[])
     }
 
     // ---- 8. 保存 cpp_trace.npz ----
-    // 只保存 D/F 层: nn_output 和 processed_action (B/C 层因 motion 帧机制差异跳过)
+    // B/C 层: 6 个 C++ 独立计算的观测 term (每个通配 cnpy::npz_save 追加写入)
+    // 注意: "w" 模式 (create+truncate) 仅在第一个 key 使用, 后续 key 使用 "a" (append)
     std::cout << "[7] 保存 cpp_trace.npz" << std::endl;
+    cnpy::npz_save(out_dir + "/cpp_trace.npz", "motion_command",
+                   cpp_obs_motion_command.data(), {n_steps, 54}, "w");
+    cnpy::npz_save(out_dir + "/cpp_trace.npz", "motion_anchor_ori_b",
+                   cpp_obs_motion_anchor_ori_b.data(), {n_steps, 6}, "a");
+    cnpy::npz_save(out_dir + "/cpp_trace.npz", "base_ang_vel_pelvis",
+                   cpp_obs_base_ang_vel.data(), {n_steps, 3}, "a");
+    cnpy::npz_save(out_dir + "/cpp_trace.npz", "joint_pos_rel",
+                   cpp_obs_joint_pos.data(), {n_steps, 27}, "a");
+    cnpy::npz_save(out_dir + "/cpp_trace.npz", "joint_vel_rel",
+                   cpp_obs_joint_vel.data(), {n_steps, 27}, "a");
+    cnpy::npz_save(out_dir + "/cpp_trace.npz", "last_action",
+                   cpp_obs_last_action.data(), {n_steps, 27}, "a");
+    // D/F 层
     cnpy::npz_save(out_dir + "/cpp_trace.npz", "nn_output",
-                   cpp_nn_output.data(), {n_steps, (size_t)ACT_DIM}, "w");
+                   cpp_nn_output.data(), {n_steps, (size_t)ACT_DIM}, "a");
     cnpy::npz_save(out_dir + "/cpp_trace.npz", "processed_action",
                    cpp_proc_action.data(), {n_steps, (size_t)ACT_DIM}, "a");
 

@@ -4,31 +4,23 @@
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include "isaaclab/utils/utils.h"
 
-static Eigen::Quaternionf init_quat;
+static Eigen::Quaternionf init_quat = Eigen::Quaternionf::Identity();
 std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion = nullptr;
 
 
-// h1_2 has 1 torso DOF (torso_yaw) at joint index 12
-Eigen::Quaternionf robot_quat_w(isaaclab::ManagerBasedRLEnv* env)
-{
-    using H1_2Type = unitree::BaseArticulation<LowState_t::SharedPtr>;
-    H1_2Type* robot = dynamic_cast<H1_2Type*>(env->robot.get());
-
-    auto root_quat = env->robot->data.root_quat_w;
-    auto & motors = robot->lowstate->msg_.motor_state();
-
-    Eigen::Quaternionf torso_quat = root_quat
-        * Eigen::AngleAxisf(motors[12].q(), Eigen::Vector3f::UnitZ());
-
-    return torso_quat;
-}
-
+// Helper: motion pelvis → torso quat (pelvis * Rz(waist_yaw))
+// TORSO_JOINT_IDX defined in unitree_articulation.h
 Eigen::Quaternionf motion_anchor_quat_w(std::shared_ptr<State_Mimic::MotionLoader_> loader)
 {
     const auto root_quat = loader->root_quaternion();
     const auto joint_pos = loader->joint_pos();
+    if (joint_pos.size() <= unitree::TORSO_JOINT_IDX) {
+        throw std::runtime_error(
+            "motion_anchor_quat_w: motion data has " + std::to_string(joint_pos.size()) +
+            " joints, need at least " + std::to_string(unitree::TORSO_JOINT_IDX + 1));
+    }
     Eigen::Quaternionf torso_quat = root_quat
-        * Eigen::AngleAxisf(joint_pos[12], Eigen::Vector3f::UnitZ());
+        * Eigen::AngleAxisf(joint_pos[unitree::TORSO_JOINT_IDX], Eigen::Vector3f::UnitZ());
 
     return torso_quat;
 }
@@ -43,6 +35,10 @@ void State_Mimic::init_replay(std::shared_ptr<MotionLoader_> motion_ptr,
     // 使用 yawQuaternion() 而非手动 atan2+AngleAxis 以对齐 State_Mimic::enter() 和 Python
     // 原因: 手动 atan2(R(1,0), R(0,0)) 虽然数学等价于 yawQuaternion(), 但 float32 舍入路径不同,
     // 会产出 ~2e-3 的 init_quat 差异, 并级联放大到 motion_anchor_ori_b 的 ~2.87e-3 误差
+    //
+    // NOTE: ref_quat MUST be the motion TORSO quat (pelvis * Rz(waist_yaw)),
+    //       robot_quat MUST be the robot TORSO quat (from IMU on torso).
+    //       Passing pelvis quats will produce a wrong yaw alignment off by Rz(waist_yaw).
     auto ref_yaw_quat = isaaclab::yawQuaternion(ref_quat);
     auto robot_yaw_quat = isaaclab::yawQuaternion(robot_quat);
     init_quat = robot_yaw_quat * ref_yaw_quat.conjugate();
@@ -75,10 +71,19 @@ REGISTER_OBSERVATION(motion_anchor_ori_b)
 {
     auto loader = State_Mimic::motion;
 
-    // Use pelvis quat (IMU quat) to match Python training side
-    // Training side uses body_link_quat_w which is pelvis frame
-    auto real_quat_w = env->robot->data.root_quat_w;  // pelvis quat from IMU
-    auto ref_quat_w  = loader->root_quaternion();     // motion pelvis quat
+    // BUGFIX: Use motion TORSO quat (pelvis * Rz(torso_joint)) to match training.
+    // Training side uses body_link_quat_w[:, torso_body_id] which is the torso frame.
+    // Previously using loader->root_quaternion() (pelvis frame) produced a relative
+    // orientation off by Rz(motion_waist_yaw), contaminating the 6D orientation obs.
+    auto real_quat_w = env->robot->data.root_quat_w;   // robot torso (IMU)
+
+    // Bounds check: motion data must have at least TORSO_JOINT_IDX + 1 joints
+    auto motion_jp = loader->joint_pos();
+    if (motion_jp.size() <= unitree::TORSO_JOINT_IDX) {
+        return std::vector<float>(6, 0.0f); // safe fallback
+    }
+    auto ref_quat_w  = loader->root_quaternion()        // motion torso: pelvis * Rz(waist)
+        * Eigen::AngleAxisf(motion_jp[unitree::TORSO_JOINT_IDX], Eigen::Vector3f::UnitZ());
 
     auto rot_ = (init_quat * ref_quat_w).conjugate() * real_quat_w;
     // 必须使用显式类型 Eigen::Matrix3f, 不能用 auto!
@@ -126,6 +131,14 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     } else {
         time_range_[1] = motion_->duration;
     }
+
+    if (time_range_[0] >= time_range_[1]) {
+        throw std::runtime_error(
+            "Invalid time_range: time_start (" + std::to_string(time_range_[0]) +
+            ") >= time_end (" + std::to_string(time_range_[1]) + ")"
+        );
+    }
+
     std::string end_state = "FixStand";
     if (cfg["end_state"]) {
         end_state = cfg["end_state"].as<std::string>();
@@ -145,7 +158,18 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     );
     this->registered_checks.emplace_back(
         std::make_pair(
-            [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); }, // bad orientation
+            [&]()->bool{
+                // Compute bad_orientation from raw lowstate data in the FSM thread
+                // (pre_run() calls lowstate->update(), so IMU/motor data is fresh).
+                // This decouples fall detection from the policy thread's robot->update().
+                auto & imu = lowstate->msg_.imu_state();
+                Eigen::Quaternionf imu_quat(
+                    imu.quaternion()[0], imu.quaternion()[1],
+                    imu.quaternion()[2], imu.quaternion()[3]
+                );
+                float waist_yaw = lowstate->msg_.motor_state()[unitree::TORSO_JOINT_IDX].q();
+                return isaaclab::mdp::bad_orientation(imu_quat, waist_yaw, 1.0f);
+            },
             FSMStringMap.right.at("Passive")
         )
     );
@@ -200,10 +224,22 @@ void State_Mimic::enter()
 
         // 2. Initialize motion reference at start time
         motion->reset(env->robot->data, time_range_[0]);
-        // Use pelvis quat (IMU quat) to match Python training side
-        auto ref_yaw_quat = isaaclab::yawQuaternion(motion->root_quaternion());
-        auto robot_yaw_quat = isaaclab::yawQuaternion(env->robot->data.root_quat_w);
-        init_quat = robot_yaw_quat * ref_yaw_quat.conjugate();
+        // BUGFIX: Use motion TORSO quat (pelvis * Rz(torso_joint)) for yaw alignment,
+        // matching training which uses body_link_quat_w[:, torso_body_id].
+        // Previously using root_quaternion() (pelvis yaw) introduced Rz(waist_yaw)
+        // error in init_quat, which cascaded into motion_anchor_ori_b observations.
+        auto motion_jp = motion->joint_pos();
+        if (motion_jp.size() <= unitree::TORSO_JOINT_IDX) {
+            spdlog::error("init_quat: motion data has {} joints, need >= {}", 
+                          motion_jp.size(), unitree::TORSO_JOINT_IDX + 1);
+            init_quat = Eigen::Quaternionf::Identity(); // safe fallback
+        } else {
+            auto motion_torso_quat = motion->root_quaternion()
+                * Eigen::AngleAxisf(motion_jp[unitree::TORSO_JOINT_IDX], Eigen::Vector3f::UnitZ());
+            auto ref_yaw_quat = isaaclab::yawQuaternion(motion_torso_quat);
+            auto robot_yaw_quat = isaaclab::yawQuaternion(env->robot->data.root_quat_w);
+            init_quat = robot_yaw_quat * ref_yaw_quat.conjugate();
+        }
 
         // 3. Align default_joint_pos to current robot pose, so that joint_pos_rel ≈ 0
         //    and the policy sees a consistent starting state regardless of entry source.
