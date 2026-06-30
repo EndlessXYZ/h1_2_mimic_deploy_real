@@ -90,6 +90,14 @@ inline std::filesystem::path parser_policy_dir(std::filesystem::path policy_dir)
         policy_dir = param::proj_dir / policy_dir;
     }
 
+    // If the path points to a regular file (e.g. .../exported/policy.onnx),
+    // resolve to the containing base directory (parent of the "exported" folder)
+    if (std::filesystem::exists(policy_dir) && std::filesystem::is_regular_file(policy_dir)) {
+        policy_dir = policy_dir.parent_path().parent_path();
+        spdlog::info("Policy directory: {} (resolved from policy file)", policy_dir.string());
+        return policy_dir;
+    }
+
     // If there is no `exported` folder in this folder,
     // then sort all the folders under this folder and take the last folder
     if (!std::filesystem::exists(policy_dir / "exported")) {

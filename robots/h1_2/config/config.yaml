@@ -74,15 +74,18 @@ FSM:
       Passive: LT + B.on_pressed
       FixStand: RT + A.on_pressed
     motion_file: config/policy/mimic/v0/params/dance1_subject2.npz
-    policy_dir: config/policy/mimic/v0/
+    # motion_file: config/policy/mimic/v0/params/dance1_subject2_first3s.npz
+
+    policy_dir: config/policy/mimic/v0/exported/policy.onnx
     time_start: 0.0
     time_end: 1000.0
     dump_enabled: true
+    debug_ref_action: true   # set true to bypass policy and follow reference motion directly
   WalkVelocity:
     transitions:
       Passive: LT + B.on_pressed
-      FixStand: RT + Y.on_pressed
-    policy_dir: config/policy/walk_velocity/v0/
+      FixStand: RT + Y.on_pressed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
+    policy_dir: config/policy/walk_velocity/v0/exported/policy.onnx
     dump_enabled: true
     # 手臂/腰部固定目标位置（参考 h1_2_walk_deploy_real/configs/h1_2.yaml）
     arm_waist_target: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]

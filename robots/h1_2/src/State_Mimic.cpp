@@ -139,6 +139,12 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
         );
     }
 
+    // Debug: bypass policy and send reference joint positions directly
+    if (cfg["debug_ref_action"] && cfg["debug_ref_action"].as<bool>()) {
+        debug_ref_action_ = true;
+        spdlog::warn("DEBUG MODE ENABLED: joint commands will follow reference motion directly (policy bypassed)");
+    }
+
     std::string end_state = "FixStand";
     if (cfg["end_state"]) {
         end_state = cfg["end_state"].as<std::string>();
@@ -323,8 +329,17 @@ void State_Mimic::enter()
 
 void State_Mimic::run()
 {
-    auto action = env->action_manager->processed_actions();
-    for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
-        lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
+    if (debug_ref_action_) {
+        // DEBUG MODE: Send reference joint positions directly, bypassing policy
+        auto ref_pos = motion_->joint_pos();
+        auto& joint_ids = env->robot->data.joint_ids_map;
+        for (size_t i = 0; i < joint_ids.size() && i < static_cast<size_t>(ref_pos.size()); i++) {
+            lowcmd->msg_.motor_cmd()[joint_ids[i]].q() = ref_pos[i];
+        }
+    } else {
+        auto action = env->action_manager->processed_actions();
+        for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
+            lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
+        }
     }
 }

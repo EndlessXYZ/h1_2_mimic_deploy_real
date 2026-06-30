@@ -47,6 +47,9 @@ private:
     // CSV dump
     std::ofstream dump_file_;
     bool dump_enabled_ = false;
+
+    // Debug: bypass policy and send reference joint positions directly
+    bool debug_ref_action_ = false;
 };
 
 
