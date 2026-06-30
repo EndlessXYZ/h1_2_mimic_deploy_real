@@ -39,10 +39,10 @@ REGISTER_OBSERVATION(base_ang_vel_pelvis)
     return std::vector<float>(pelvis_omega.data(), pelvis_omega.data() + 3);
 }
 
-// WARNING: Returns gravity in TORSO frame (IMU on torso_link), not pelvis frame.
-// The training side expects pelvis frame (root_link = pelvis floating base).
-// Use projected_gravity_pelvis for the correct pelvis-frame variant.
-// If you need pelvis-frame gravity matching training, DO NOT use this observation term.
+// Returns gravity in TORSO frame (IMU on torso_link).
+// MJLab H1_2 velocity training uses pelvis frame for projected_gravity
+// (root_link = pelvis freejoint body). Use projected_gravity_pelvis for
+// the correct pelvis-frame variant to match the training side.
 REGISTER_OBSERVATION(projected_gravity)
 {
     auto & asset = env->robot;
@@ -165,9 +165,8 @@ REGISTER_OBSERVATION(last_action)
 };
 
 // 速度指令观测
-// 参考 h1_2_walk_deploy_real/Controller.cpp L252-254:
-//   obs = joy * max_cmd * cmd_scale
-// 此函数返回 joy * max_cmd，后续由 ObservationManager 乘以 cmd_scale
+// 训练侧 command 范围由 velocity_command.py 定义（play 模式 ranges），
+// 部署侧将 joystick [-1, 1] 直接映射到该范围：vx = joy * max_vx 等。
 REGISTER_OBSERVATION(velocity_commands)
 {
     auto & asset = env->robot;
@@ -177,38 +176,28 @@ REGISTER_OBSERVATION(velocity_commands)
         return std::vector<float>{0.0f, 0.0f, 0.0f};
     }
 
-    // 从 params 中读取 ranges 配置（作为 max_cmd）
-    // 参考 h1_2_walk_deploy_real/configs/h1_2_onnx.yaml
-    float lin_vel_x_min = -0.8f, lin_vel_x_max = 0.8f;
-    float lin_vel_y_min = -0.5f, lin_vel_y_max = 0.5f;
-    float ang_vel_z_min = -1.57f, ang_vel_z_max = 1.57f;
+    // 从 params 中读取 ranges 配置
+    float lin_vel_x_max = 1.0f;
+    float lin_vel_y_max = 0.5f;
+    float ang_vel_z_max = 0.5f;
 
     if (params["ranges"]) {
         auto ranges = params["ranges"];
         if (ranges["lin_vel_x"]) {
-            lin_vel_x_min = ranges["lin_vel_x"]["lower"].as<float>();
             lin_vel_x_max = ranges["lin_vel_x"]["upper"].as<float>();
         }
         if (ranges["lin_vel_y"]) {
-            lin_vel_y_min = ranges["lin_vel_y"]["lower"].as<float>();
             lin_vel_y_max = ranges["lin_vel_y"]["upper"].as<float>();
         }
         if (ranges["ang_vel_z"]) {
-            ang_vel_z_min = ranges["ang_vel_z"]["lower"].as<float>();
             ang_vel_z_max = ranges["ang_vel_z"]["upper"].as<float>();
         }
     }
 
-    // 将 joystick 输入 clamp 到 ranges 范围，再乘以 max_cmd
-    // 参考: obs = joy * max_cmd * cmd_scale
-    float joy_x = std::clamp(joystick->ly(), lin_vel_x_min, lin_vel_x_max);
-    float joy_y = std::clamp(-joystick->lx(), lin_vel_y_min, lin_vel_y_max);
-    float joy_z = std::clamp(-joystick->rx(), ang_vel_z_min, ang_vel_z_max);
-
-    // 乘以 max_cmd（ranges 的绝对值），后续 scale 再乘以 cmd_scale
-    float vx = joy_x * lin_vel_x_max;
-    float vy = joy_y * lin_vel_y_max;
-    float wz = joy_z * ang_vel_z_max;
+    // joystick 输入范围 [-1, 1]，直接映射到 command 范围
+    float vx = joystick->ly() * lin_vel_x_max;
+    float vy = -joystick->lx() * lin_vel_y_max;
+    float wz = -joystick->rx() * ang_vel_z_max;
 
     return std::vector<float>{vx, vy, wz};
 }

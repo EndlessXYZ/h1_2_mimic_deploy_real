@@ -13,7 +13,18 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
         YAML::LoadFile(policy_dir / "params" / "deploy.yaml"),
         std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr>>(FSMState::lowstate)
     );
-    env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
+
+    // Support explicit policy_onnx override; otherwise default to exported/policy.onnx
+    if (cfg["policy_onnx"]) {
+        std::filesystem::path onnx_path = cfg["policy_onnx"].as<std::string>();
+        if (onnx_path.is_relative()) {
+            onnx_path = param::proj_dir / onnx_path;
+        }
+        env->alg = std::make_unique<isaaclab::OrtRunner>(onnx_path);
+        spdlog::info("Using overridden policy onnx: {}", onnx_path.string());
+    } else {
+        env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
+    }
 
     this->registered_checks.emplace_back(
         std::make_pair(
@@ -37,7 +48,7 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
 void State_RLBase::run()
 {
     auto action = env->action_manager->processed_actions();
-    for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
-        lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
+    for(int i(0); i < action.size(); i++) {
+        lowcmd->msg_.motor_cmd()[i].q() = action[i];
     }
 }

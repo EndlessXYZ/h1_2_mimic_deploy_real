@@ -12,7 +12,7 @@ FSM:
       type: LocoVelocity
     WalkVelocity:
       id: 7
-      type: WalkVelocity
+      type: RLBase
   Passive:
     transitions: 
       FixStand: LT + up.on_pressed
@@ -81,13 +81,10 @@ FSM:
     time_end: 1000.0
     dump_enabled: true
     debug_ref_action: true   # set true to bypass policy and follow reference motion directly
+    end_state: WalkVelocity  # auto-switch after playback
   WalkVelocity:
     transitions:
       Passive: LT + B.on_pressed
-      FixStand: RT + Y.on_pressed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
-    policy_dir: config/policy/walk_velocity/v0/exported/policy.onnx
-    dump_enabled: true
-    # 手臂/腰部固定目标位置（参考 h1_2_walk_deploy_real/configs/h1_2.yaml）
-    arm_waist_target: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    arm_waist_kp: [300, 120, 120, 120, 80, 80, 80, 80, 120, 120, 120, 80, 80, 80, 80]
-    arm_waist_kd: [3, 2, 2, 2, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1]
+      FixStand: RT + Y.on_pressed
+    policy_dir: config/policy/velocity/v0/     # supports directory path or onnx file path
+    # policy_onnx: config/policy/velocity/v0/exported/policy.onnx  # optional: override onnx

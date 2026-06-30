@@ -3,7 +3,6 @@
 #include "FSM/State_FixStand.h"
 #include "FSM/State_RLBase.h"
 #include "FSM/State_LocoVelocity.h"
-#include "FSM/State_WalkVelocity.h"
 #include "State_Mimic.h"
 
 #include <sstream>
@@ -90,8 +89,9 @@ int main(int argc, char** argv)
 
     std::cout << "Press [L2 + Up] to enter FixStand mode.\n";
     std::cout << "From FixStand, press [RB + X] for LocoVelocity (joystick-driven).\n";
+    std::cout << "From FixStand, press [RB + Y] for WalkVelocity (RLBase, joystick-driven).\n";
     std::cout << "From FixStand, press [RB + A] for Mimic_Dance1.\n";
-    std::cout << "Or use --timed \"FixStand:3,Mimic_Dance1_subject2:10\" for auto-switching.\n";
+    std::cout << "Or use --timed \"FixStand:3,WalkVelocity:10\" for auto-switching.\n";
 
     while (true)
     {

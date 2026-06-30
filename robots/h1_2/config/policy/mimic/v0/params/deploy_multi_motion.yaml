@@ -1,0 +1,7 @@
+policies:
+- loop_mode: wrap
+  name: dance1_subject2
+  onnx: motion_0.onnx
+- loop_mode: wrap
+  name: dance1_subject2_first3s
+  onnx: motion_1.onnx

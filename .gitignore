@@ -6,3 +6,6 @@
 simulate/mujoco
 thirdparty/
 **/thirdparty/
+ToDelete/
+*.npz
+*.onnx

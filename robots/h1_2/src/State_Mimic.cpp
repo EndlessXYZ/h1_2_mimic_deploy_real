@@ -117,7 +117,8 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
 
     // Motion
     motion_ = std::make_shared<MotionLoader_>(motion_file.string());
-    spdlog::info("Loaded motion file '{}' with duration {:.2f}s", motion_file.stem().string(), motion_->duration);
+    spdlog::info("Loaded motion file '{}' with duration {:.2f}s (fps={}, dt={})",
+                 motion_file.stem().string(), motion_->duration, motion_->fps, motion_->dt);
     motion = motion_;
     if(cfg["time_start"]) {
         float time_start = cfg["time_start"].as<float>();
@@ -154,12 +155,21 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
         YAML::LoadFile(policy_dir / "params" / "deploy.yaml"),
         articulation
     );
+    // Override step_dt to match motion fps — must match training-side step_dt
+    env->step_dt = motion_->dt;
+    spdlog::info("step_dt set to {:.5f}s (from motion fps={})", env->step_dt, motion_->fps);
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
 
+    // Resolve end_state id at construction time to avoid lambda capturing this
+    int end_state_id = FSMStringMap.right.at(end_state);
+    // Capture env pointer and constants by value to eliminate implicit this-capture
+    auto* env_ptr = env.get();
+    float step_dt = env->step_dt;
+    float time_end = time_range_[1];
     this->registered_checks.emplace_back(
         std::make_pair(
-            [&]()->bool{ return (env->episode_length * env->step_dt) > time_range_[1]; }, // time out
-            FSMStringMap.right.at(end_state)
+            [env_ptr, step_dt, time_end]()->bool{ return (env_ptr->episode_length * step_dt) > time_end; },
+            end_state_id
         )
     );
     this->registered_checks.emplace_back(
